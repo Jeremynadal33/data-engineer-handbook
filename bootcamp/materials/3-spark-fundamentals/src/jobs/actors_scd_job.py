@@ -1,49 +1,61 @@
 from pyspark.sql import SparkSession
 
 query = """
-
-WITH with_previous AS (
-    SELECT actor
-        , actorid
-        , current_year
-        , quality_class
-        , is_active
-        , LAG(quality_class, 1) OVER (PARTITION BY actorid ORDER BY current_year) AS previous_quality_class
-        , LAG(is_active, 1) OVER (PARTITION BY actorid ORDER BY current_year)     AS previous_is_active
-    FROM actors
-    WHERE current_year < 2021
-),
-with_indicators AS (
-    SELECT *
-        , CASE
-            WHEN quality_class <> previous_quality_class THEN 1
-            WHEN is_active <> previous_is_active THEN 1
-            ELSE 0
-        END AS change_indicator
-    FROM with_previous
-),
-with_streaks AS (
-    SELECT *
-        , SUM(change_indicator) OVER (PARTITION BY actorid ORDER BY current_year) AS streak_identifier
-    FROM with_indicators
+with changes as (
+	select
+		actorid
+		, actor
+		, quality_class
+		, is_active
+		, current_year
+		, lag(quality_class, 1) over (partition by actorid order by current_year) != quality_class
+			or lag(is_active, 1) over (partition by actorid order by current_year) != is_active
+			as changed
+	from
+		actors
 )
-SELECT
-    actor
-    , actorid
-    , quality_class
-    , is_active
-    , MIN(current_year) AS start_year
-    , MAX(current_year) AS end_year
-    , 2020 AS current_year
-FROM with_streaks
-GROUP BY actor
-        , actorid
-        , quality_class
-        , is_active
-        , streak_identifier
-ORDER BY actor
-        , streak_identifier
 
+, change_identifier as (
+	select
+		actorid
+		, actor
+		, is_active
+		, quality_class
+		, current_year
+		, sum(
+			case
+				when changed is null then 1
+				when changed then 1
+				else 0
+			end
+		) over (partition by actorid order by current_year) as change_identifier
+	from
+		changes
+)
+
+, grouped as (
+	select
+		actorid
+		, actor
+		, is_active
+		, quality_class
+		, change_identifier
+		, min(current_year) as start_year
+		, max(current_year) as end_year
+	from
+		change_identifier
+	group by
+		1, 2, 3, 4, 5
+)
+
+select
+	actor
+    , actorid
+	, quality_class
+	, is_active
+	, start_year
+	, end_year
+from grouped
 """
 
 
